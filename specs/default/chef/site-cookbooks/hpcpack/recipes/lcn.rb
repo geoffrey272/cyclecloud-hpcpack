@@ -22,7 +22,8 @@ end
 Chef::Log.info( "Using AD Admin: #{node['hpcpack']['ad']['admin']['name']} ..." )
 
 domain=node['hpcpack']['ad']['domain']
-connectionstring=node['clustername']
+headnodename=node['clustername']
+connectionstring=node['connectionstring']
 install_file='hpcnodeagent.tar.gz'
 mount_dir = '/smbshare'
 
@@ -45,17 +46,6 @@ if ! node['hpcpack']['cert']['filename'].nil?
   end
 end
 
-execute 'add domain' do
-    command "echo search #{domain}>>/etc/resolv.conf"
-    notifies :run, 'execute[add private nameserver]', :delayed
-end
-
-execute 'add private nameserver' do
-    command "echo nameserver 10.0.0.4>>/etc/resolv.conf"
-    action :nothing
-    notifies :run, 'execute[mount]', :delayed
-end
-
 case node[:platform_family]
 when 'ubuntu', 'debian'
     execute 'update' do
@@ -63,10 +53,31 @@ when 'ubuntu', 'debian'
     end
 end
 
-execute 'mount' do
-    command "mount -t cifs //#{connectionstring}/REMINST/LinuxNodeAgent #{mount_dir} -o vers=2.1,domain=#{domain},username=#{node['hpcpack']['ad']['admin']['name']},password='#{node['hpcpack']['ad']['admin']['password']}',dir_mode=0777,file_mode=0777"
+execute 'add domain' do
+    command "echo search #{domain}>>/etc/resolv.conf"
+    notifies :run, 'execute[add private nameserver]', :delayed
+end
+execute 'add private nameserver' do
+    command "echo nameserver 10.0.0.4>>/etc/resolv.conf"
     action :nothing
-    notifies :run, 'execute[copy file]', :delayed
+    notifies :run, 'bash[extract_module]', :delayed
+end
+
+
+bash 'extract_module' do
+  code <<-EOH
+    IFS=','
+    read -ra strArr <<<#{connectionstring}
+    for node in "${strArr[@]}";
+    do
+    ping -c 3 $node
+    if [ $? -eq 0 ]; then
+    mount -t cifs //$node/REMINST/LinuxNodeAgent #{mount_dir} -o vers=2.1,domain=#{domain},username=#{node['hpcpack']['ad']['admin']['name']},password='#{node['hpcpack']['ad']['admin']['password']}',dir_mode=0777,file_mode=0777
+    fi
+    done
+  EOH
+  action :nothing
+  notifies :run, 'execute[copy file]', :delayed
 end
 
 execute 'copy file' do
@@ -87,4 +98,11 @@ execute 'setup by keyvault' do
     action :nothing
     only_if {node['hpcpack']['keyvault']['vault_name'] && node['hpcpack']['keyvault']['cert']['cert_name']}
 end
+
+
+
+
+
+
+
 

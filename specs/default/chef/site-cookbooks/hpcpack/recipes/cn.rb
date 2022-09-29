@@ -6,7 +6,7 @@ include_recipe "hpcpack::_install_dotnetfx"
 
 bootstrap_dir = node['cyclecloud']['bootstrap']
 install_dir = "#{bootstrap_dir}\\hpcpack"
-
+connectionstring = node['connectionstring']
 directory install_dir
 
 cookbook_file "#{bootstrap_dir}\\InstallHPCComputeNode.ps1" do
@@ -23,11 +23,13 @@ end
 # Allow either basic CN installer or full installer
 powershell_script 'unzip-HpcPackInstaller' do
   code <<-EOH
+
   #{bootstrap_dir}\\unzip.ps1 #{node['jetpack']['downloads']}/#{node['hpcpack']['cn']['installer_filename']} #{install_dir}
   if(Test-Path "#{install_dir}\\HpcCompute_x64.msi") {
     echo "Installing #{install_dir}\\HpcCompute_x64.msi"
   }
   elseif(Test-Path "#{install_dir}\\setup\\HpcCompute_x64.msi") {
+
     Copy-Item -Path "#{install_dir}\\amd64\\SSCERuntime_x64-ENU.exe" -Destination "#{install_dir}" -Force
     Copy-Item -Path "#{install_dir}\\MPI\\MSMpiSetup.exe" -Destination "#{install_dir}" -Force
     Copy-Item -Path "#{install_dir}\\setup\\HpcCompute_x64.msi" -Destination "#{install_dir}" -Force
@@ -47,9 +49,12 @@ end
 # If we failed to download HpcPackInstaller, we will try to copy from head node
 powershell_script 'Copy-HpcPackInstaller' do
   code  <<-EOH
-  $reminst = "\\\\#{node['hpcpack']['hn']['hostname']}\\REMINST"
+  $nodearray = "#{connectionstring}" -split ","
   $retry = 0
   While($true) {
+  $nodecount=0
+  foreach ($node in $nodearray){
+    $reminst = "\\\\$node\\REMINST"
     if(Test-Path "$reminst\\Setup.exe") {
       if(Test-Path "$reminst\\Setup\\HpcCompute_x64.msi") {
         Copy-Item -Path "$reminst\\amd64\\SSCERuntime_x64-ENU.exe" -Destination "#{install_dir}" -Force
@@ -67,8 +72,13 @@ powershell_script 'Copy-HpcPackInstaller' do
         Copy-Item -Path "$reminst\\Setup\\*" -Destination "#{install_dir}\\Setup" -Recurse -Force -Exclude @('*_x86.msi', 'HpcKsp*')
         Copy-Item -Path "$reminst\\Setup.exe" -Destination "#{install_dir}" -Force
       }
+      $nodecount++
       break
     }
+    }
+    if($nodecount -gt 0){
+        break
+      }
     elseif($retry++ -lt 50) {
       start-sleep -seconds 20
     }
@@ -92,16 +102,16 @@ powershell_script 'install-hpcpack' do
     $setupFilePath = "#{install_dir}\\Setup.exe"
   }
   if($vaultName -and $vaultCertName) {
-    #{bootstrap_dir}\\InstallHPCComputeNode.ps1 -SetupFilePath $setupFilePath -ClusterConnectionString #{node['hpcpack']['hn']['hostname']} -VaultName $vaultName -VaultCertName $vaultCertName
+    #{bootstrap_dir}\\InstallHPCComputeNode.ps1 -SetupFilePath $setupFilePath -ClusterConnectionString "#{connectionstring}" -VaultName $vaultName -VaultCertName $vaultCertName
   }
   else {
     $secpasswd = ConvertTo-SecureString '#{node['hpcpack']['cert']['password']}' -AsPlainText -Force
-    #{bootstrap_dir}\\InstallHPCComputeNode.ps1 -SetupFilePath $setupFilePath -ClusterConnectionString #{node['hpcpack']['hn']['hostname']} -PfxFilePath "#{node['jetpack']['downloads']}\\#{node['hpcpack']['cert']['filename']}" -PfxFilePassword $secpasswd
+    #{bootstrap_dir}\\InstallHPCComputeNode.ps1 -SetupFilePath $setupFilePath -ClusterConnectionString "#{connectionstring}" -PfxFilePath "#{node['jetpack']['downloads']}\\#{node['hpcpack']['cert']['filename']}" -PfxFilePassword $secpasswd
   }
   EOH
   not_if <<-EOH
   $hpcRegValues = Get-Item HKLM:\\SOFTWARE\\Microsoft\\HPC -ErrorAction SilentlyContinue | Get-ItemProperty | Select-Object -Property ClusterConnectionString
-  ($hpcRegValues -and ($hpcRegValues.ClusterConnectionString -eq "#{node['hpcpack']['hn']['hostname']}"))
+  ($hpcRegValues -and ($hpcRegValues.ClusterConnectionString -eq "#{connectionstring}"))
   EOH
 end
 
@@ -111,7 +121,15 @@ powershell_script 'assign-NodeTemplate' do
     code <<-EOH
     $env:CCP_LOGROOT_USR = "%LOCALAPPDATA%\\Microsoft\\Hpc\\LogFiles\\"
     Add-PsSnapin Microsoft.HPC
-    $headNodeName = "#{node['hpcpack']['hn']['hostname']}"
+    $headNodeName = $null
+    $nodearray = "#{connectionstring}" -split ","
+    foreach ($node in $nodearray){
+     $reminst = "\\\\$node\\REMINST"
+     if(Test-Path "$reminst") {
+      $headNodeName=$node
+      break
+      }
+    }
     Set-Content Env:CCP_SCHEDULER $headNodeName
     $retry = 0
     $this_node = Get-HpcNode -Name $env:COMPUTERNAME -Scheduler $headNodeName -ErrorAction SilentlyContinue

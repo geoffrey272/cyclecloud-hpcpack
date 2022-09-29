@@ -6,7 +6,7 @@ include_recipe "hpcpack::_install_dotnetfx"
 
 bootstrap_dir = node['cyclecloud']['bootstrap']
 install_dir = "#{bootstrap_dir}\\hpcpack"
-
+connectionstring = node['connectionstring']
 directory install_dir
 
 cookbook_file "#{bootstrap_dir}\\InstallHPCBrokerNode.ps1" do
@@ -16,10 +16,13 @@ end
 
 powershell_script 'Copy-HpcPackInstaller' do
   code  <<-EOH
-  $reminst = "\\\\#{node['hpcpack']['hn']['hostname']}\\REMINST"
+  $nodearray = "#{connectionstring}" -split ","
   $retry = 0
   While($true) {
-    if(Test-Path "$reminst\\Setup.exe") {
+  $nodecount=0
+  foreach ($node in $nodearray){
+      $reminst = "\\\\$node\\REMINST"
+      if(Test-Path "$reminst\\Setup.exe") {
       New-Item "#{install_dir}\\amd64" -ItemType Directory -Force
       New-Item "#{install_dir}\\i386" -ItemType Directory -Force
       New-Item "#{install_dir}\\MPI" -ItemType Directory -Force
@@ -29,11 +32,16 @@ powershell_script 'Copy-HpcPackInstaller' do
       Copy-Item -Path "$reminst\\MPI\\*" -Destination "#{install_dir}\\MPI" -Force
       Copy-Item -Path "$reminst\\Setup\\*" -Destination "#{install_dir}\\Setup" -Recurse -Force -Exclude @('*_x86.msi', 'HpcKsp*')
       Copy-Item -Path "$reminst\\Setup.exe" -Destination "#{install_dir}" -Force
+      $nodecount++
       break
+        }
     }
-    elseif($retry++ -lt 50) {
-      start-sleep -seconds 20
-    }
+      if($nodecount -gt 0){
+        break
+      }
+      elseif($retry++ -lt 50) {
+          start-sleep -seconds 20
+        }
     else {
       throw "head node not available"
     }
@@ -50,16 +58,16 @@ powershell_script 'install-hpcpack' do
   $vaultName = "#{node['hpcpack']['keyvault']['vault_name']}"
   $vaultCertName = "#{node['hpcpack']['keyvault']['cert']['cert_name']}"
   if($vaultName -and $vaultCertName) {
-    #{bootstrap_dir}\\InstallHPCBrokerNode.ps1 -SetupFilePath "#{install_dir}\\Setup.exe" -ClusterConnectionString #{node['hpcpack']['hn']['hostname']} -VaultName $vaultName -VaultCertName $vaultCertName
+    #{bootstrap_dir}\\InstallHPCBrokerNode.ps1 -SetupFilePath "#{install_dir}\\Setup.exe" -ClusterConnectionString "#{connectionstring}" -VaultName $vaultName -VaultCertName $vaultCertName
   }
   else {
     $secpasswd = ConvertTo-SecureString '#{node['hpcpack']['cert']['password']}' -AsPlainText -Force
-    #{bootstrap_dir}\\InstallHPCBrokerNode.ps1 -SetupFilePath "#{install_dir}\\Setup.exe" -ClusterConnectionString #{node['hpcpack']['hn']['hostname']} -PfxFilePath "#{node['jetpack']['downloads']}\\#{node['hpcpack']['cert']['filename']}" -PfxFilePassword $secpasswd
+    #{bootstrap_dir}\\InstallHPCBrokerNode.ps1 -SetupFilePath "#{install_dir}\\Setup.exe" -ClusterConnectionString "#{connectionstring}" -PfxFilePath "#{node['jetpack']['downloads']}\\#{node['hpcpack']['cert']['filename']}" -PfxFilePassword $secpasswd
   }
   EOH
   not_if <<-EOH
   $hpcRegValues = Get-Item HKLM:\\SOFTWARE\\Microsoft\\HPC -ErrorAction SilentlyContinue | Get-ItemProperty | Select-Object -Property ClusterConnectionString, SSLThumbprint
-  ($hpcRegValues -and ($hpcRegValues.ClusterConnectionString -eq "#{node['hpcpack']['hn']['hostname']}"))
+  ($hpcRegValues -and ($hpcRegValues.ClusterConnectionString -eq "#{connectionstring}"))
   EOH
 end
 
@@ -68,7 +76,15 @@ powershell_script 'assign-NodeTemplate' do
     code <<-EOH
     $env:CCP_LOGROOT_USR = "%LOCALAPPDATA%\\Microsoft\\Hpc\\LogFiles\\"
     Add-PsSnapin Microsoft.HPC
-    $headNodeName = "#{node['hpcpack']['hn']['hostname']}"
+    $headNodeName = $null
+    $nodearray = "#{connectionstring}" -split ","
+    foreach ($node in $nodearray){
+     $reminst = "\\\\$node\\REMINST"
+     if(Test-Path "$reminst") {
+      $headNodeName=$node
+      break
+      }
+    }
     Set-Content Env:CCP_SCHEDULER $headNodeName
     $nodeTemplate = $null
     $retry = 0

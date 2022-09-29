@@ -4,7 +4,7 @@ include_recipe "hpcpack::_join-ad-domain" if node['hpcpack']['headNodeAsDC'] == 
 include_recipe "hpcpack::_new-ad-domain" if node['hpcpack']['headNodeAsDC']
 
 bootstrap_dir = node['cyclecloud']['bootstrap']
-
+connectionstring = node['connectionstring']
 cookbook_file "#{bootstrap_dir}\\InstallHPCHeadNode.ps1" do
   source "InstallHPCHeadNode.ps1"
   action :create

@@ -133,7 +133,7 @@ if($hpcRegKey -and ("ClusterConnectionString" -in $hpcRegKey.Property))
         }        
     }
 }
-#-PassiveHeadNode
+
 $setupArgs = "-unattend -Quiet -BrokerNode:`"$ClusterConnectionString`" -SSLThumbprint:$SSLThumbprint"
 $retry = 0
 while($true)
